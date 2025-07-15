@@ -34,7 +34,7 @@ public interface CategoryMapper {
      * 根据id删除分类
      * @param id
      */
-    @AutoFill(value = OperationType.INSERT)
+    @AutoFill(value = OperationType.UPDATE)
     @Delete("delete from category where id = #{id}")
     void deleteById(Long id);
 
