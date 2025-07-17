@@ -42,4 +42,5 @@ public class DishController {
         PageResult pageResult = dishService.pageQuery(dishPageQueryDTO);
         return Result.success(pageResult);
     }
+
 }
