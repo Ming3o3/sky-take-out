@@ -20,7 +20,8 @@ import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
+import com.sky.entity.Setmeal;
+import com.sky.mapper.SetmealMapper;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -34,6 +35,9 @@ public class DishServiceImpl implements DishService {
     private DishFlavorMapper dishFlavorMapper;
     @Autowired
     private SetmealDishMapper setmealDishMapper;
+    @Autowired
+    private SetmealMapper setmealMapper;
+
     /**
      * 新增菜品，同时保存对应的口味数据
      *
@@ -208,5 +212,41 @@ public class DishServiceImpl implements DishService {
 
         return dishVOList;
     }
+
+
+
+    /**
+     * 菜品的起售和停售
+     *
+     * @param status
+     * @param id
+     */
+    @Transactional
+    public void startOrStop(Integer status, Long id) {
+
+        List<Long> dishId = new ArrayList<Long>();
+        dishId.add(id);
+
+        //菜品停售，则包含菜品的套餐同时停售
+        if (status == StatusConstant.DISABLE) {
+            List<Long> setmealIds = setmealDishMapper.getSetmealIdsByDishIds(dishId);
+            if (setmealIds != null && setmealIds.size() > 0) {
+                setmealIds.forEach(Id -> {
+                    Setmeal setmeal = Setmeal.builder()
+                            .id(Id)
+                            .status(status)
+                            .build();
+                    setmealMapper.update(setmeal);
+                });
+            }
+        }
+
+        Dish dish=Dish.builder()
+                .id(id)
+                .status(status)
+                .build();
+        dishMapper.update(dish);
+    }
+
 
 }
