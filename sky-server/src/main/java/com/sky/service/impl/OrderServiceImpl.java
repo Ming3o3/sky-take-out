@@ -21,6 +21,7 @@ import com.sky.vo.OrderPaymentVO;
 import com.sky.vo.OrderStatisticsVO;
 import com.sky.vo.OrderSubmitVO;
 import com.sky.vo.OrderVO;
+import com.sky.websocket.WebSocketServer;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
 import org.springframework.beans.BeanUtils;
@@ -58,6 +59,9 @@ public class OrderServiceImpl implements OrderService {
     private WeChatPayUtil weChatPayUtil;
 
     @Autowired
+    private WebSocketServer webSocketServer;
+
+    @Autowired
     private UserMapper userMapper;
 
     @Value("${sky.shop.address}")
@@ -68,6 +72,7 @@ public class OrderServiceImpl implements OrderService {
 
     /**
      * 用户下单
+     *
      * @param ordersSubmitDTO
      * @return
      */
@@ -83,7 +88,7 @@ public class OrderServiceImpl implements OrderService {
         }
 
         //检查用户的收获地址是否超出配送范围
-        checkOutOfRange(addressBook.getCityName()+addressBook.getDistrictName()+addressBook.getDetail());
+        checkOutOfRange(addressBook.getCityName() + addressBook.getDistrictName() + addressBook.getDetail());
 
 
         //查询当前用户的购物车数据
@@ -92,7 +97,7 @@ public class OrderServiceImpl implements OrderService {
         ShoppingCart shoppingCart = new ShoppingCart();
         shoppingCart.setUserId(userId);
         List<ShoppingCart> shoppingCartList = shoppingCartMapper.list(shoppingCart);
-        if(shoppingCartList == null || shoppingCartList.size() == 0){
+        if (shoppingCartList == null || shoppingCartList.size() == 0) {
 
             //抛出业务异常
             throw new ShoppingCartBusinessException(MessageConstant.SHOPPING_CART_IS_NULL);
@@ -100,7 +105,7 @@ public class OrderServiceImpl implements OrderService {
 
         //2.向订单表插入一条数据
         Orders orders = new Orders();
-        BeanUtils.copyProperties(ordersSubmitDTO,orders);
+        BeanUtils.copyProperties(ordersSubmitDTO, orders);
         orders.setOrderTime(LocalDateTime.now());
         orders.setPayStatus(Orders.UN_PAID);
         orders.setStatus(Orders.PENDING_PAYMENT);
@@ -113,9 +118,9 @@ public class OrderServiceImpl implements OrderService {
 
         List<OrderDetail> orderDetailList = new ArrayList<>();
         //3.向订单明细表插入多条数据
-        for(ShoppingCart cart : shoppingCartList){
+        for (ShoppingCart cart : shoppingCartList) {
             OrderDetail orderDetail = new OrderDetail();//订单明细
-            BeanUtils.copyProperties(cart,orderDetail);
+            BeanUtils.copyProperties(cart, orderDetail);
             orderDetail.setOrderId(orders.getId());//设置当前订单明细关联的订单id
             orderDetailList.add(orderDetail);
 
@@ -135,10 +140,6 @@ public class OrderServiceImpl implements OrderService {
 
         return orderSubmitVO;
     }
-
-
-
-
 
 
     /**
@@ -171,17 +172,29 @@ public class OrderServiceImpl implements OrderService {
         vo.setPackageStr(jsonObject.getString("package"));
 
         //为替代微信支付成功后的数据库订单状态更新，多定义一个方法进行修改
-        Integer OrderPaidStatus= Orders.PAID;//支付状态，已支付
-        Integer OrderStatus=Orders.TO_BE_CONFIRMED;//订单状态，待接单
+        Integer OrderPaidStatus = Orders.PAID;//支付状态，已支付
+        Integer OrderStatus = Orders.TO_BE_CONFIRMED;//订单状态，待接单
 
         //发现没有将支付时间  check_out属性赋值，所以在这里更新
-        LocalDateTime check_out_time=LocalDateTime.now();
+        LocalDateTime check_out_time = LocalDateTime.now();
 
         //获取订单号码
-        String orderNumber=ordersPaymentDTO.getOrderNumber();
+        String orderNumber = ordersPaymentDTO.getOrderNumber();
 
         log.info("调用updateStatus,用于替换微信支付更新数据库状态的问题");
-        orderMapper.updateStatus(OrderStatus,OrderPaidStatus,check_out_time,orderNumber);
+        orderMapper.updateStatus(OrderStatus, OrderPaidStatus, check_out_time, orderNumber);
+
+        //通过WebSocket向客户端浏览器推送消息 type orderId content
+        Map map = new HashMap();
+        map.put("type", 1);  //1表示来单提醒 2表示客户催单
+        map.put("orderId", orderNumber);
+        map.put("content", "订单号：" + orderNumber);
+
+        String json = JSON.toJSONString(map);
+        webSocketServer.sendToAllClient(json);
+
+
+
         return vo;
     }
 
@@ -204,6 +217,15 @@ public class OrderServiceImpl implements OrderService {
                 .build();
 
         orderMapper.update(orders);
+
+        //通过websocket向客户端浏览器推送消息
+        Map map = new HashMap();
+        map.put("type", 1);
+        map.put("orderId", ordersDB.getId());
+        map.put("content", "订单号：" + outTradeNo);
+
+        String json = JSON.toJSONString(map);
+        webSocketServer.sendToAllClient(json);
     }
 
     /**
@@ -542,19 +564,20 @@ public class OrderServiceImpl implements OrderService {
 
     /**
      * 检查客户的收货地址是否超出配送范围
+     *
      * @param address
      */
     private void checkOutOfRange(String address) {
         Map map = new HashMap();
-        map.put("address",shopAddress);
-        map.put("output","json");
-        map.put("ak",ak);
+        map.put("address", shopAddress);
+        map.put("output", "json");
+        map.put("ak", ak);
 
         //获取店铺的经纬度坐标
         String shopCoordinate = HttpClientUtil.doGet("https://api.map.baidu.com/geocoding/v3", map);
 
         JSONObject jsonObject = JSON.parseObject(shopCoordinate);
-        if(!jsonObject.getString("status").equals("0")){
+        if (!jsonObject.getString("status").equals("0")) {
             throw new OrderBusinessException("店铺地址解析失败");
         }
 
@@ -565,12 +588,12 @@ public class OrderServiceImpl implements OrderService {
         //店铺经纬度坐标
         String shopLngLat = lat + "," + lng;
 
-        map.put("address",address);
+        map.put("address", address);
         //获取用户收货地址的经纬度坐标
         String userCoordinate = HttpClientUtil.doGet("https://api.map.baidu.com/geocoding/v3", map);
 
         jsonObject = JSON.parseObject(userCoordinate);
-        if(!jsonObject.getString("status").equals("0")){
+        if (!jsonObject.getString("status").equals("0")) {
             throw new OrderBusinessException("收货地址解析失败");
         }
 
@@ -581,26 +604,16 @@ public class OrderServiceImpl implements OrderService {
         //用户收货地址经纬度坐标
         String userLngLat = lat + "," + lng;
 
-        map.put("origin",shopLngLat);
-        map.put("destination",userLngLat);
-        map.put("steps_info","0");
+        map.put("origin", shopLngLat);
+        map.put("destination", userLngLat);
+        map.put("steps_info", "0");
 
         //路线规划
         String json = HttpClientUtil.doGet("https://api.map.baidu.com/directionlite/v1/driving", map);
 
         jsonObject = JSON.parseObject(json);
-        if(!jsonObject.getString("status").equals("0")){
-            throw new OrderBusinessException("配送路线规划失败");
-        }
-
-        //数据解析
-        JSONObject result = jsonObject.getJSONObject("result");
-        JSONArray jsonArray = (JSONArray) result.get("routes");
-        Integer distance = (Integer) ((JSONObject) jsonArray.get(0)).get("distance");
-
-        if(distance > 5000){
-            //配送距离超过5000米
-            throw new OrderBusinessException("超出配送范围");
+        if (!jsonObject.getString("status").equals("0")) {
+            throw new OrderBusinessException("配送路线");
         }
     }
 }
